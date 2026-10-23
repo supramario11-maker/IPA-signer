@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111827">
+  <title>IPA Signer · Build & Download</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0b1020;--panel:#131b2e;--line:#29344c;--text:#edf2ff;--muted:#a6b2ca;--accent:#8bafff;--good:#9be7c4}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top,#172444 0,var(--bg) 58%);font:16px/1.55 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--text)}
+    main{width:min(920px,calc(100% - 32px));margin:0 auto;padding:48px 0 64px}.eyebrow{color:var(--accent);font-weight:700;letter-spacing:.12em;text-transform:uppercase;font-size:.78rem}
+    h1{font-size:clamp(2rem,7vw,3.5rem);line-height:1.05;margin:.6rem 0 1rem;letter-spacing:-.04em}p{color:var(--muted)}.lead{font-size:1.1rem;max-width:700px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;margin:28px 0}.card{border:1px solid var(--line);background:rgba(19,27,46,.92);border-radius:18px;padding:22px}
+    .icon{font-size:1.7rem}.card h2{font-size:1.2rem;margin:.5rem 0}.card p{margin:.5rem 0 1rem}
+    a.button{display:inline-flex;justify-content:center;align-items:center;gap:8px;background:var(--accent);color:#091226;text-decoration:none;font-weight:750;border-radius:11px;padding:12px 16px;min-height:46px}
+    a.button.secondary{background:#263550;color:var(--text);border:1px solid #3a4b69}a.button:focus-visible{outline:3px solid white;outline-offset:3px}
+    .notice{border:1px solid #695b31;background:#282316;border-radius:14px;padding:16px;color:#f4e4b5;margin:20px 0}.notice strong{color:#fff0bd}
+    .steps{padding-left:1.25rem;color:var(--muted)}.steps li{margin:.55rem 0}code{background:#202b41;border-radius:5px;padding:2px 5px;color:#dce7ff;overflow-wrap:anywhere}
+    footer{border-top:1px solid var(--line);padding-top:20px;margin-top:32px;color:var(--muted);font-size:.9rem}footer a{color:var(--accent)}
+    .status{border:1px solid var(--line);border-radius:14px;padding:16px;background:rgba(19,27,46,.65)}.status strong{color:var(--good)}
+    @media(max-width:520px){main{padding-top:32px}.card{padding:18px}}
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">IPA-signer · GitHub Pages</div>
+  <h1>Build. Sign. Download.</h1>
+  <p class="lead">Start a GitHub Actions run to package the Omnisette server for Linux/Docker and, when valid Apple signing assets are configured, sign an IPA for a provisioned device.</p>
+
+  <div class="notice"><strong>Protect your account:</strong> this page never asks for your Apple Account password, verification codes, cookies, or authentication tokens. Only use signing certificates and provisioning profiles you are authorized to use.</div>
+
+  <section class="grid" aria-label="Build options">
+    <article class="card">
+      <div class="icon" aria-hidden="true">🐳</div>
+      <h2>Linux / Docker server</h2>
+      <p>Builds the upstream Omnisette server, checks its container, and packages a Docker image plus a Compose configuration for download.</p>
+      <a class="button secondary" href="https://github.com/supramario11-maker/IPA-signer/actions/workflows/sign-ipa.yml">Generate server package ↗</a>
+    </article>
+    <article class="card">
+      <div class="icon" aria-hidden="true">📱</div>
+      <h2>Signed IPA</h2>
+      <p>Signs an uploaded release IPA using your authorized certificate and matching provisioning profile stored in GitHub Actions secrets.</p>
+      <a class="button" href="https://github.com/supramario11-maker/IPA-signer/actions/workflows/sign-ipa.yml">Generate signed IPA ↗</a>
+    </article>
+  </section>
+
+  <section class="status" aria-labelledby="steps-heading">
+    <h2 id="steps-heading">How to generate and download</h2>
+    <ol class="steps">
+      <li>Upload exactly one <code>.ipa</code> file as an asset on a GitHub Release. For private apps, make this repository private first; release assets in a public repository can be public.</li>
+      <li>For signing, add <code>APPLE_CERTIFICATE_BASE64</code>, <code>APPLE_CERTIFICATE_PASSWORD</code>, and <code>APPLE_PROFILE_BASE64</code> under repository Settings → Secrets and variables → Actions. Do not put secrets in source files.</li>
+      <li>Open the workflow using either button, tap <strong>Run workflow</strong>, and enter the release tag.</li>
+      <li>When the run finishes, open the run summary and download the <strong>omnisette-server-package</strong> and <strong>signed-ipa</strong> artifacts. The IPA job can only succeed if the certificate, profile, bundle ID, and app structure match.</li>
+    </ol>
+    <p><a class="button secondary" href="https://github.com/supramario11-maker/IPA-signer/actions">View workflow runs ↗</a></p>
+  </section>
+
+  <p>GitHub Pages is a static website: it cannot run Docker itself or securely accept Apple credentials. Build jobs run on GitHub Actions. A generated server package is downloadable but does not create a permanent Linux server; deploy it to a Linux host you control if you need a persistent endpoint.</p>
+
+  <footer>
+    <p>Project: <a href="https://github.com/supramario11-maker/IPA-signer">supramario11-maker/IPA-signer</a> · Server source: <a href="https://github.com/SideStore/omnisette-server">SideStore/omnisette-server</a></p>
+    <p>Anisette data is not an Apple signing certificate. Apple-authorized signing and device provisioning are still required.</p>
+  </footer>
+</main>
+</body>
+</html>
