@@ -1,109 +1,171 @@
-
-name: Build and Test Linux Omnisette Server
+name: Build Omnisette Package and Sign IPA
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag containing exactly one IPA asset (for signing)"
+        required: false
+        type: string
+      build_server:
+        description: "Build and test Linux/Docker server package"
+        required: true
+        default: true
+        type: boolean
+      sign_ipa:
+        description: "Sign the release IPA (requires configured signing secrets)"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 jobs:
-  build-and-test:
+  server-package:
+    if: inputs.build_server
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-
     steps:
-      - name: Install Docker and dependencies
+      - name: Install dependencies and verify runner Docker
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y \
-            ca-certificates curl git unzip perl make \
-            docker.io
-          sudo systemctl start docker
-          sudo docker --version
-
-      - name: Download and extract required libraries
+          sudo apt-get install -y ca-certificates curl git unzip perl make
+          docker --version
+          docker buildx version
+          docker info
+      - name: Build Docker image and create package
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/omnisette/lib"
-          cd "$RUNNER_TEMP/omnisette"
-
-          curl --fail --location --retry 3 \
-            "https://apps.mzstatic.com/content/android-apple-music-apk/applemusic.apk" \
-            --output applemusic.apk
-
-          unzip -o applemusic.apk \
-            'lib/*/libstoreservicescore.so' \
-            'lib/*/libCoreADI.so'
-
-          rm applemusic.apk
-
-          find . -type f \
-            \( -name 'libstoreservicescore.so' \
-            -o -name 'libCoreADI.so' \) -print
-
-      - name: Install Rust
-        run: |
-          set -euo pipefail
-          curl --proto '=https' --tlsv1.2 -sSf \
-            https://sh.rustup.rs -o "$RUNNER_TEMP/rustup-init.sh"
-          sh "$RUNNER_TEMP/rustup-init.sh" -y --profile minimal
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          "$HOME/.cargo/bin/rustc" --version
-          "$HOME/.cargo/bin/cargo" --version
-
-      - name: Build upstream server
-        run: |
-          set -euo pipefail
-          git clone --depth 1 \
-            https://github.com/SideStore/omnisette-server.git \
-            "$RUNNER_TEMP/omnisette-source"
-
-          cd "$RUNNER_TEMP/omnisette-source"
-          cargo build --release
-
-      - name: Build Docker image
-        run: |
-          set -euo pipefail
-          cd "$RUNNER_TEMP/omnisette-source"
-
-          sudo docker build \
-            --tag omnisette-local:test .
-
-      - name: Start container for a short test
-        run: |
-          set -euo pipefail
-
-          sudo docker run -d \
-            --name omnisette-test \
-            -p 127.0.0.1:6969:80 \
-            --volume omnisette_test_data:/opt/omnisette-server/lib \
-            omnisette-local:test
-
+          git clone --depth 1 https://github.com/SideStore/omnisette-server.git "$RUNNER_TEMP/source"
+          cd "$RUNNER_TEMP/source"
+          docker build --pull -t omnisette-local:test .
+          mkdir -p "$RUNNER_TEMP/package"
+          docker save omnisette-local:test | gzip -1 > "$RUNNER_TEMP/package/omnisette-image.tar.gz"
+          cat > "$RUNNER_TEMP/package/docker-compose.yml" <<'EOF'
+          services:
+            omnisette:
+              image: omnisette-local:test
+              container_name: omnisette
+              restart: unless-stopped
+              ports:
+                - "6969:80"
+              volumes:
+                - omnisette_data:/opt/omnisette-server/lib
+          volumes:
+            omnisette_data:
+          EOF
+          cat > "$RUNNER_TEMP/package/README.txt" <<'EOF'
+          Omnisette Docker package
+          Load image: docker load -i omnisette-image.tar.gz
+          Start on your own Linux host: docker compose up -d
+          Logs: docker compose logs --tail=100
+          Stop: docker compose down
+          This is a package, not a permanently hosted server.
+          Configure firewall/TLS/access controls before public exposure.
+          Upstream: https://github.com/SideStore/omnisette-server
+          EOF
+          docker run -d --name omnisette-smoke-test -p 127.0.0.1:16969:80 omnisette-local:test
           sleep 5
-          sudo docker ps -a
-          sudo docker logs omnisette-test
-
-      - name: Collect diagnostics
-        if: always()
-        run: |
-          mkdir -p "$RUNNER_TEMP/omnisette-diagnostics"
-          sudo docker logs omnisette-test \
-            > "$RUNNER_TEMP/omnisette-diagnostics/container.log" 2>&1 || true
-          sudo docker inspect omnisette-test \
-            > "$RUNNER_TEMP/omnisette-diagnostics/container-inspect.json" 2>&1 || true
-
-      - name: Upload diagnostics
-        if: always()
+          docker ps -a
+          docker logs omnisette-smoke-test
+          docker rm -f omnisette-smoke-test
+      - name: Upload server package
         uses: actions/upload-artifact@v4
         with:
-          name: linux-server-diagnostics
-          path: ${{ runner.temp }}/omnisette-diagnostics/
-          if-no-files-found: warn
+          name: omnisette-server-package
+          path: ${{ runner.temp }}/package/
+          if-no-files-found: error
+          retention-days: 7
 
-      - name: Clean up
+  sign-ipa:
+    if: inputs.sign_ipa
+    runs-on: macos-14
+    timeout-minutes: 25
+    steps:
+      - name: Check required signing secrets
+        env:
+          CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          PROFILE: ${{ secrets.APPLE_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          [[ -n "$CERTIFICATE" ]] || { echo "::error::Missing APPLE_CERTIFICATE_BASE64"; exit 1; }
+          [[ -n "$CERT_PASSWORD" ]] || { echo "::error::Missing APPLE_CERTIFICATE_PASSWORD"; exit 1; }
+          [[ -n "$PROFILE" ]] || { echo "::error::Missing APPLE_PROFILE_BASE64"; exit 1; }
+      - name: Download IPA from release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          [[ -n "$RELEASE_TAG" ]] || { echo "::error::Enter a release tag"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/input" "$RUNNER_TEMP/output"
+          gh release download "$RELEASE_TAG" --repo "$REPO" --pattern '*.ipa' --dir "$RUNNER_TEMP/input"
+          shopt -s nullglob
+          files=("$RUNNER_TEMP"/input/*.ipa)
+          [[ ${#files[@]} -eq 1 ]] || { echo "::error::Release must contain exactly one IPA asset"; exit 1; }
+          cp "${files[0]}" "$RUNNER_TEMP/input/input.ipa"
+      - name: Import certificate and provisioning profile
+        env:
+          CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          PROFILE: ${{ secrets.APPLE_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          security create-keychain -p "$RUNNER_TEMP/keychain-password" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security unlock-keychain -p "$RUNNER_TEMP/keychain-password" build.keychain
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          printf '%s' "$PROFILE" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
+          security import "$RUNNER_TEMP/signing.p12" -k build.keychain -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security list-keychains -d user -s build.keychain
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$RUNNER_TEMP/keychain-password" build.keychain
+          security cms -D -i "$RUNNER_TEMP/profile.mobileprovision" > "$RUNNER_TEMP/profile.plist"
+          UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' "$RUNNER_TEMP/profile.plist")
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$RUNNER_TEMP/profile.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
+          IDENTITY=$(security find-identity -v -p codesigning build.keychain | awk -F '"' '/Apple Development:|Apple Distribution:/ {print $2; exit}')
+          [[ -n "$IDENTITY" ]] || { echo "::error::No valid Apple signing identity found"; exit 1; }
+          echo "SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+      - name: Unpack and validate IPA
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/unpacked"
+          ditto -x -k "$RUNNER_TEMP/input/input.ipa" "$RUNNER_TEMP/unpacked"
+          APP=$(find "$RUNNER_TEMP/unpacked/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)
+          [[ -n "$APP" ]] || { echo "::error::No Payload/*.app bundle found"; exit 1; }
+          echo "APP_PATH=$APP" >> "$GITHUB_ENV"
+          /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
+      - name: Sign embedded code and app
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' item; do
+            codesign --force --sign "$SIGNING_IDENTITY" --preserve-metadata=identifier,entitlements,flags --generate-entitlement-der "$item"
+          done < <(find "$APP_PATH" \( -name '*.framework' -o -name '*.appex' -o -name '*.xpc' -o -name '*.dylib' \) -print0 | sort -zr)
+          codesign --force --sign "$SIGNING_IDENTITY" --preserve-metadata=identifier,entitlements,flags --generate-entitlement-der "$APP_PATH"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+      - name: Create signed IPA
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/output/Payload"
+          ditto "$APP_PATH" "$RUNNER_TEMP/output/Payload/$(basename "$APP_PATH")"
+          (cd "$RUNNER_TEMP/output" && zip -qry signed.ipa Payload)
+          unzip -t "$RUNNER_TEMP/output/signed.ipa"
+          shasum -a 256 "$RUNNER_TEMP/output/signed.ipa" > "$RUNNER_TEMP/output/SHA256SUMS.txt"
+      - name: Upload signed IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-ipa
+          path: |
+            ${{ runner.temp }}/output/signed.ipa
+            ${{ runner.temp }}/output/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 3
+      - name: Clean signing material
         if: always()
         run: |
-          sudo docker rm -f omnisette-test || true
-          sudo docker volume rm omnisette_test_data || true
+          security delete-keychain build.keychain || true
+          rm -f "$RUNNER_TEMP/signing.p12" "$RUNNER_TEMP/profile.mobileprovision" "$RUNNER_TEMP/profile.plist"

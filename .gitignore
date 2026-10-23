@@ -1,0 +1,16 @@
+# Never commit signing assets or Apple account data
+*.p12
+*.p8
+*.mobileprovision
+*.ipa
+*.cer
+*.privatekey
+.env
+.env.*
+!.env.example
+# Build output
+build/
+dist/
+target/
+*.tar.gz
+.DS_Store
